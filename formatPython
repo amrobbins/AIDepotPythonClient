@@ -1,0 +1,7 @@
+if [ "$EUID" == 0 ]
+  then echo "Dont run this as root, run as you. Exiting."
+  exit
+fi
+find ./ -type d \( -path ./venv -o -path ./.venv -o -path '*/migrations' \) -prune -o -type f \( -name "*.py" \) ! -name "manage.py" ! -name "settings.py" -print | xargs yapf -i
+
+
