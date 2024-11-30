@@ -1,2 +1,2 @@
-from Client import Client
-from Resources import Resources
+from .Resources import Resources
+from .Client import Client

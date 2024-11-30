@@ -56,40 +56,6 @@ class Client():
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(self._submit_job_async(resource, job, version))
 
-    def submit_job_as_future(self,
-                             resource: AIDepot.Resources,
-                             job: dict,
-                             version: str = '1') -> asyncio.Future[Tuple[int, Optional[dict], dict]]:
-        """Submit a job to the server and get a future that will return the results.
-
-            To use in a synchronous context:
-            f = submit_job_as_future(...)
-            if f.done()
-                response = f.result()
-
-            If you are submitting a job from an async context, use submit_job_async(...) instead.
-
-        Returns:
-        An  asyncio.Future that yields:
-            When the job submission is successful:
-                (HTTP status code of completed job, completed job response, job submission response)
-            When the job submission is not successful:
-                (HTTP status code of job submission request, None, job submission response)
-        """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            # Schedule the coroutine for future execution and return the future
-            future = asyncio.run_coroutine_threadsafe(self._submit_job_async(resource, job, version), loop)
-            return future
-        else:
-            # Create an asyncio.Task in the current event loop
-            task = asyncio.create_task(self._submit_job_async(resource, job, version))
-            return task
-
     async def submit_job_async(self,
                                resource: AIDepot.Resources,
                                job: dict,
@@ -153,30 +119,6 @@ class Client():
 
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(self.connect_and_listen_for_status_async(job_id))
-
-    def connect_and_listen_for_status_as_future(self, job_id: int) -> asyncio.Future[Tuple[int, dict]]:
-        """ Returns a future that yields the response when done.
-
-        To use in a synchronous context:
-            f = connect_and_listen_for_status_as_future(...)
-            if f.done()
-                response = f.result()
-
-            If you are submitting a job from an async context, use connect_and_listen_for_status_async(...) instead.
-        """
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            # No running event loop
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            # Schedule the coroutine for future execution and return the future
-            future = asyncio.run_coroutine_threadsafe(self.connect_and_listen_for_status_async(job_id), loop)
-            return future
-        else:
-            # Create an asyncio.Task in the current event loop
-            task = asyncio.create_task(self.connect_and_listen_for_status_async(job_id))
-            return task
 
     async def connect_and_listen_for_status_async(self, job_id: int) -> Tuple[int, dict]:
         """ Waits for the job to complete and then immediately returns the response """
