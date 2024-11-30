@@ -26,7 +26,13 @@ requirements = parse_requirements('requirements.txt')
 setup(
     name='AIDepotPythonClient',
     description='Provides AI Access at scale',
-    version='1.0.0',
+    version='0.alpha.0',
     packages=find_packages(),
     install_requires=requirements,
+    classifiers=[
+        'Programming Language :: Python :: 3',
+        'License :: OSI Approved :: Apache Software License',
+        'Operating System :: OS Independent',
+    ],
+    python_requires='>=3.7',
 )
