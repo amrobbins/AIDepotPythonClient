@@ -1,19 +1,78 @@
 import asyncio
+import copy
 import json
 
 import websockets
 from aiohttp import ContentTypeError
+from urllib3.util import parse_url
 from websockets.exceptions import ConnectionClosedError
-import urllib.parse
+import urllib
+from urllib.parse import urlparse
 from typing import *
 from datetime import datetime
 import tzlocal
 import aiohttp
+import aioftp
 
-import AIDepot
+from PIL import Image
+import base64
+from io import BytesIO
 
 import nest_asyncio
+
 nest_asyncio.apply()
+
+from AIDepot import Resources, VISION
+
+# Note on vision support from the client:
+#
+# The client accepts the following format, for vision enabled models, and will put it into the server-side API format.
+# Optionally, you may build the message directly in API format and send it through the client.
+# Note that if you do that then the image needs to be sized correctly for the model that you are using,
+# the size can be seen in AIDepot.Resources
+#
+# image_path may be a local file name, an http URL or an ftp URL
+#
+# Client assist format:
+#
+# response = client.chat.completions.create(
+# conversations = [{
+#     'messages': [
+#         {
+#             "role": "user",
+#             "content": [
+#                 {"type": "text", "text": "What’s in this image?"},
+#                 {
+#                     "type": "image",
+#                     "image_path": "/home/me/myImage.png",
+#                     - or -
+#                     "image_path": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+#                     - or -
+#                     "image_path": "ftps://username:password@hostname/path/to/file",
+#                 },
+#             ],
+#         }
+#     ],
+#     'max_tokens': 1000,
+# }]
+#
+# API format:
+#
+# conversations = [{
+#     'messages': [
+#         {
+#             "role": "user",
+#             "content": [
+#                 {"type": "text", "text": "What’s in this image?"},
+#                 {
+#                     "type": "image",
+#                     "image": "data:image/jpeg;base64,{base64string}",
+#                 },
+#             ],
+#         }
+#     ],
+#     'max_tokens': 1000,
+# }]
 
 
 class Client():
@@ -36,15 +95,13 @@ class Client():
 
         self.session = None
         self.local_timezone = tzlocal.get_localzone()
+        self.ftp_client = None
 
     def __del__(self):
         loop = asyncio.get_event_loop()
         loop.run_until_complete(self._destroy_session())
 
-    def submit_job(self,
-                   resource: AIDepot.Resources,
-                   job: dict,
-                   version: str = '1') -> Tuple[int, Optional[dict], dict]:
+    def submit_job(self, resource: Resources, job: dict, version: str = '1') -> Tuple[int, Optional[dict], dict]:
         """Submit a job to the server and wait for the response
 
         Returns:
@@ -57,7 +114,7 @@ class Client():
         return loop.run_until_complete(self._submit_job_async(resource, job, version))
 
     async def submit_job_async(self,
-                               resource: AIDepot.Resources,
+                               resource: Resources,
                                job: dict,
                                version: str = '1') -> Tuple[int, Optional[dict], dict]:
         """Submit a job to the server and a future waits for the response
@@ -70,7 +127,7 @@ class Client():
         """
         return await self._submit_job_async(resource, job, version)
 
-    def start_job(self, resource: AIDepot.Resources, job: dict, version: str = '1') -> Tuple[int, dict]:
+    def start_job(self, resource: Resources, job: dict, version: str = '1') -> Tuple[int, dict]:
         """Start a job and wait for the job submittal status
 
         Returns (http status code, job submittal response)
@@ -78,15 +135,32 @@ class Client():
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(self.start_job_async(resource, job, version))
 
-    async def start_job_async(self, resource: AIDepot.Resources, job: dict, version: str = '1') -> Tuple[int, dict]:
+    async def start_job_async(self, resource: Resources, job: dict, version: str = '1') -> Tuple[int, dict]:
         """Start a job without waiting for the job submittal status
 
         Returns a future, when awaited gives: (http status code, job submittal response)
         """
+
+        # Perform any preprocessing that is needed here
+        if VISION in resource.value:
+            enhanced_job = copy.deepcopy(job)
+            output_image_size = resource.value[VISION]
+            tasks = []
+            for conversation in enhanced_job['conversations']:
+                for message in conversation['messages']:
+                    for content_item in message['content']:
+                        if content_item['type'] == 'image' and 'image_path' in content_item.keys():
+                            task = self._enhance_message_for_vision(message, output_image_size, format='JPEG')
+                            tasks.append(task)
+                            break
+            if tasks:
+                await asyncio.gather(*tasks)
+            job = enhanced_job
+
         code, response = await self._submit_http_request_async(resource, job, version)
         return (code, self._parse_dict(response))
 
-    def get_job_result(self, resource: AIDepot.Resources, job_id: int, version='1') -> Tuple[int, dict]:
+    def get_job_result(self, resource: Resources, job_id: int, version='1') -> Tuple[int, dict]:
         """ Fetch the job results given the job_id.
 
         Does not wait for the job to complete.
@@ -99,7 +173,7 @@ class Client():
         loop = asyncio.get_event_loop()
         return loop.run_until_complete(self.get_job_result_async(resource, job_id, version))
 
-    async def get_job_result_async(self, resource: AIDepot.Resources, job_id: int, version='1') -> Tuple[int, dict]:
+    async def get_job_result_async(self, resource: Resources, job_id: int, version='1') -> Tuple[int, dict]:
         """ Fetch the job results given the job_id.
 
         Does not wait for the job to complete.
@@ -212,8 +286,8 @@ class Client():
                     raise
 
     @staticmethod
-    def build_http_route(resource: AIDepot.Resources, version: str = '1'):
-        api_path = f'https://{Client.URL}/{Client.API_PATH}/v{version}/{resource.value}/'
+    def build_http_route(resource: Resources, version: str = '1'):
+        api_path = f'https://{Client.URL}/{Client.API_PATH}/v{version}/{resource.value["route"]}/'
         return api_path
 
     def build_websocket_route(self, job_id: int):
@@ -222,7 +296,7 @@ class Client():
         return websocket_url
 
     async def _submit_job_async(self,
-                                resource: AIDepot.Resources,
+                                resource: Resources,
                                 job: dict,
                                 version: str = '1') -> Tuple[int, Optional[dict], dict]:
 
@@ -238,7 +312,7 @@ class Client():
 
         return response_code, result, job_submittal_response
 
-    async def _submit_http_request_async(self, resource: AIDepot.Resources, job: dict, version: str):
+    async def _submit_http_request_async(self, resource: Resources, job: dict, version: str):
         api_path = self.build_http_route(resource, version)
 
         if self.session is None:
@@ -286,3 +360,81 @@ class Client():
             return datetime.fromisoformat(value).astimezone(self.local_timezone)
         else:
             return value
+
+    async def image_to_base64(self, image_path, output_size: Tuple[int, int] = (512, 512), format: str = 'JPEG') -> str:
+
+        # HTTP
+        if image_path.startswith('http://') or image_path.startswith('https://'):
+            # Fetch the image from the URL
+            async with self.session.get(image_path) as response:
+                if response.status == 200:
+                    content = await response.read()
+                    image = Image.open(BytesIO(content))
+                else:
+                    raise Exception(f"Failed to fetch image {image_path}. Status code: {response.status}")
+
+        # FTP
+        elif image_path.startswith('ftp://') or image_path.startswith('ftps://'):
+            if self.ftp_client is None:
+                self.ftp_client = aioftp.Client()
+
+            parsed_url = parse_url(image_path)
+            host = parsed_url.hostname
+            path = parsed_url.path
+            username = parsed_url.username
+            password = parsed_url.password
+            port = parsed_url.port
+
+            image_buffer = BytesIO()
+
+            try:
+                # Connect to the FTP server
+                if port is None:
+                    await self.ftp_client.connect(host)
+                else:
+                    await self.ftp_client.connect(host, port=port)
+
+                # Login to the FTP server
+                if username and password:
+                    await self.ftp_client.login(username, password)
+                else:
+                    # anonymous login
+                    await self.ftp_client.login()
+
+                # Download the specified file
+                async with self.ftp_client.download_stream(path) as stream:
+                    async for block in stream.iter_by_block():
+                        image_buffer.write(block)
+
+                image_buffer.seek(0)
+                image = Image.open(image_buffer)
+
+            except Exception as e:
+                raise Exception(f"Failed to fetch image {image_path}. {str(e)}")
+
+            finally:
+                # Always close the client
+                await self.ftp_client.quit()
+
+        # Local file
+        else:
+            image = Image.open(image_path)
+
+        # Ensure correct size and encode as base64 string
+        with image:
+            if image.size != output_size:
+                image = image.resize(output_size, Image.ANTIALIAS)
+            img_buffer = BytesIO()
+            image.save(img_buffer, format=format)
+            byte_data = img_buffer.getvalue()
+            base64_str = base64.b64encode(byte_data)
+            return base64_str.decode('utf-8')
+
+    async def _enhance_message_for_vision(self, message: dict, output_image_size: Tuple[int, int], format: str):
+        # Replace the image_path with a properly sized image encoded in base64
+        for content in message['content']:
+            if content['type'] == 'image' and 'image_path' in content.keys():
+                image_path = content['image_path']
+                image_base64 = await self.image_to_base64(image_path, output_size=output_image_size, format=format)
+                del content['image_path']
+                content['image'] = f"data:image/{format.lower()};base64,{image_base64}"
