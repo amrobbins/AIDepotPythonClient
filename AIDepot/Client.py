@@ -1,7 +1,5 @@
 import asyncio
-import copy
 import json
-
 import websockets
 from aiohttp import ContentTypeError
 from urllib3.util import parse_url
@@ -18,9 +16,13 @@ from PIL import Image
 import base64
 from io import BytesIO
 
-import nest_asyncio
-
-nest_asyncio.apply()
+from IPython import get_ipython
+try:
+    if 'IPKernelApp' in get_ipython().config:
+        import nest_asyncio
+        nest_asyncio.apply()
+except Exception:
+    pass
 
 from AIDepot import Resources, VISION
 
@@ -143,10 +145,9 @@ class Client():
 
         # Perform any preprocessing that is needed here
         if VISION in resource.value:
-            enhanced_job = copy.deepcopy(job)
             output_image_size = resource.value[VISION]
             tasks = []
-            for conversation in enhanced_job['conversations']:
+            for conversation in job['conversations']:
                 for message in conversation['messages']:
                     for content_item in message['content']:
                         if content_item['type'] == 'image' and 'image_path' in content_item.keys():
@@ -155,7 +156,6 @@ class Client():
                             break
             if tasks:
                 await asyncio.gather(*tasks)
-            job = enhanced_job
 
         code, response = await self._submit_http_request_async(resource, job, version)
         return (code, self._parse_dict(response))
