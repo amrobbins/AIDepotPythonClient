@@ -13,7 +13,6 @@ import aiohttp
 import AIDepot
 
 import nest_asyncio
-
 nest_asyncio.apply()
 
 
@@ -36,6 +35,7 @@ class Client():
         }
 
         self.session = None
+        self.local_timezone = tzlocal.get_localzone()
 
     def __del__(self):
         loop = asyncio.get_event_loop()
@@ -83,7 +83,8 @@ class Client():
 
         Returns a future, when awaited gives: (http status code, job submittal response)
         """
-        return await self._submit_http_request_async(resource, job, version)
+        code, response = await self._submit_http_request_async(resource, job, version)
+        return (code, self._parse_dict(response))
 
     def get_job_result(self, resource: AIDepot.Resources, job_id: int, version='1') -> Tuple[int, dict]:
         """ Fetch the job results given the job_id.
@@ -128,8 +129,6 @@ class Client():
             'X-API-KEY': self.api_key,
         }
 
-        local_timezone = tzlocal.get_localzone()
-
         num_retries = 0
         num_chunks = 0
         chunks_received = 0
@@ -168,12 +167,12 @@ class Client():
                                     result_json = ''.join(chunks)
                                     # Any nicety parsing of the results are done via _parse_dict,
                                     # for example putting timestamps in the user's timezone
-                                    result = Client._parse_dict(json.loads(result_json), local_timezone)
+                                    result = self._parse_dict(json.loads(result_json))
                                     return (200, result)
                             elif 'responses' in response.keys():
                                 # Any nicety parsing of the results are done via _parse_dict,
                                 # for example putting timestamps in the user's timezone
-                                result = Client._parse_dict(response, local_timezone)
+                                result = self._parse_dict(response)
                                 return (200, result)
                             else:
                                 return (
@@ -265,27 +264,25 @@ class Client():
         if self.session is not None:
             await self.session.close()
 
-    @staticmethod
-    def _parse_dict(d, local_timezone) -> Any:
+    def _parse_dict(self, d) -> Any:
         if isinstance(d, dict):
             n = {}
             for key, value in d.items():
                 if isinstance(key, str) and isinstance(value, str):
-                    n[key] = Client._parse_str(key, value, local_timezone)
+                    n[key] = self._parse_str(key, value)
                 else:
-                    n[key] = Client._parse_dict(value, local_timezone)
+                    n[key] = self._parse_dict(value)
             return n
         elif isinstance(d, list):
             v = []
             for x in d:
-                v.append(Client._parse_dict(x, local_timezone))
+                v.append(self._parse_dict(x))
             return v
         else:
             return d
 
-    @staticmethod
-    def _parse_str(key: str, value: str, local_timezone) -> any:
+    def _parse_str(self, key: str, value: str) -> any:
         if key.endswith('timestamp'):
-            return datetime.fromisoformat(value).astimezone(local_timezone)
+            return datetime.fromisoformat(value).astimezone(self.local_timezone)
         else:
             return value
