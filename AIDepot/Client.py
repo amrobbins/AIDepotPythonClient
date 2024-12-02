@@ -43,14 +43,14 @@ from AIDepot import Resources, VISION
 #         {
 #             "role": "user",
 #             "content": [
-#                 {"type": "text", "text": "What’s in this image?"},
+#                 {"type": "text", "data": "What’s in this image?"},
 #                 {
-#                     "type": "image",
-#                     "image_path": "/home/me/myImage.png",
+#                     "type": "image_path",
+#                     "data": "/home/me/myImage.png",
 #                     - or -
-#                     "image_path": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
+#                     "data": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg",
 #                     - or -
-#                     "image_path": "ftps://username:password@hostname/path/to/file",
+#                     "data": "ftps://username:password@hostname/path/to/file",
 #                 },
 #             ],
 #         }
@@ -65,10 +65,10 @@ from AIDepot import Resources, VISION
 #         {
 #             "role": "user",
 #             "content": [
-#                 {"type": "text", "text": "What’s in this image?"},
+#                 {"type": "text", "data": "What’s in this image?"},
 #                 {
 #                     "type": "image",
-#                     "image": "data:image/jpeg;base64,{base64string}",
+#                     "data": "data:image/jpeg;base64,{base64string}",
 #                 },
 #             ],
 #         }
@@ -150,7 +150,7 @@ class Client():
             for conversation in job['conversations']:
                 for message in conversation['messages']:
                     for content_item in message['content']:
-                        if content_item['type'] == 'image' and 'image_path' in content_item.keys():
+                        if content_item['type'] == 'image_path':
                             task = self._enhance_message_for_vision(message, output_image_size, format='JPEG')
                             tasks.append(task)
                             break
@@ -433,8 +433,7 @@ class Client():
     async def _enhance_message_for_vision(self, message: dict, output_image_size: Tuple[int, int], format: str):
         # Replace the image_path with a properly sized image encoded in base64
         for content in message['content']:
-            if content['type'] == 'image' and 'image_path' in content.keys():
-                image_path = content['image_path']
+            if content['type'] == 'image_path':
+                image_path = content['data']
                 image_base64 = await self.image_to_base64(image_path, output_size=output_image_size, format=format)
-                del content['image_path']
-                content['image'] = f"data:image/{format.lower()};base64,{image_base64}"
+                content['data'] = f"data:image/{format.lower()};base64,{image_base64}"
